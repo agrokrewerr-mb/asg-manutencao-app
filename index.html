@@ -172,130 +172,149 @@
   </footer>
 
   <script>
-    const API_BASE = localStorage.getItem('ASG_API') || 'https://script.google.com/macros/s/AKfycbxJsBlIoDNvgYdchZygQblyG77_LpdnoG1zidqX0GjY84SGwxfINc8IV4ft0uYTwX2n/exec';
-exec';
-    const OFFLINE_QUEUE = true;
+      // ============ CONFIG ============
+  const API_BASE = 'https://script.google.com/macros/s/AKfycbxJsBlIoDNvgYdchZygQblyG77_LpdnoG1zidqX0GjY84SGwxfINc8IV4ft0uYTwX2n/exec';
+  const OFFLINE_QUEUE = true;
 
-    const $ = (s)=>document.querySelector(s);
-    const fmtDate = (d)=> d? new Date(d).toLocaleDateString('pt-BR') : '';
-    const toast = (msg)=>{ const t=$('#toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',3000); }
+  // ============ HELPERS ============
+  const $ = (s)=>document.querySelector(s);
+  const fmtDate = (d)=> d? new Date(d).toLocaleDateString('pt-BR') : '';
+  const toast = (msg)=>{ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',3000); };
 
-    function statusPill(s){
-      if(!s) return '';
-      const cls = s.includes('VENCIDO')? 's-late' : (s.includes('BREVE')? 's-soon' : 's-ok');
-      return `<span class="status ${cls}">${s}</span>`;
-    }
+  function statusPill(s){
+    if(!s) return '';
+    const cls = s.includes('VENCIDO')? 's-late' : (s.includes('BREVE')? 's-soon' : 's-ok');
+    return `<span class="status ${cls}">${s}</span>`;
+  }
 
-    async function apiGet(path){
-      const url = `${API_BASE}?fn=${encodeURIComponent(path)}`;
-      const r = await fetch(url, {method:'GET', headers:{'Accept':'application/json'}});
-      if(!r.ok) throw new Error('GET falhou');
-      return r.json();
-    }
-    async function apiPost(payload){
-      const r = await fetch(API_BASE, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
-      if(!r.ok) throw new Error('POST falhou');
-      return r.json();
-    }
+  // ============ API (GET via JSONP para evitar CORS) ============
+  function apiGet(path){
+    return new Promise((resolve, reject) => {
+      const cb = 'cb_' + Math.random().toString(36).slice(2);
+      window[cb] = (data) => { resolve(data); cleanup(); };
+      const s = document.createElement('script');
+      s.src = `${API_BASE}?fn=${encodeURIComponent(path)}&callback=${cb}`;
+      s.onerror = () => { reject(new Error('JSONP falhou')); cleanup(); };
+      document.head.appendChild(s);
+      function cleanup(){ try{ delete window[cb]; }catch(_){} s.remove(); }
+    });
+  }
 
-    let ASSETS = [];
-    let UPCOMING = [];
+  // ============ API (POST sem preflight) ============
+  async function apiPost(payload){
+    const r = await fetch(API_BASE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload)
+    });
+    if(!r.ok) throw new Error('POST falhou');
+    return r.json();
+  }
 
-    async function loadAssets(){
-      const data = await apiGet('getAssets');
-      ASSETS = data.assets || [];
-      const sel = $('#idAtivo'); sel.innerHTML = '<option value="">Selecione…</option>' + ASSETS.map(a=>`<option value="${a.id}">${a.id} — ${a.nome}</option>`).join('');
-    }
+  // ============ STATE ============
+  let ASSETS = [];
+  let UPCOMING = [];
 
-    async function loadUpcoming(){
-      const data = await apiGet('getUpcoming');
-      UPCOMING = data.items || [];
-      renderUpcoming();
-      const kLate = UPCOMING.filter(x=>x.status && x.status.includes('VENCIDO')).length;
-      const kSoon = UPCOMING.filter(x=>x.status && x.status.includes('BREVE')).length;
-      const kOk = UPCOMING.filter(x=>x.status && x.status.includes('EM DIA')).length;
-      $('#kpiVenc').textContent = kLate;
-      $('#kpiBreve').textContent = kSoon;
-      $('#kpiDia').textContent = kOk;
-    }
+  // ============ UI BINDINGS ============
+  async function loadAssets(){
+    const data = await apiGet('getAssets');
+    ASSETS = data.assets || [];
+    const sel = document.getElementById('idAtivo');
+    sel.innerHTML = '<option value="">Selecione…</option>' + ASSETS.map(a=>`<option value="${a.id}">${a.id} — ${a.nome}</option>`).join('');
+  }
 
-    function renderUpcoming(){
-      const q = ($('#search').value||'').toLowerCase();
-      const rows = UPCOMING
-        .filter(x=>!q || [x.id,x.nome,x.tipo,x.status].join(' ').toLowerCase().includes(q))
-        .map(x=>`<tr>
-          <td>${x.id||''}</td>
-          <td>${x.nome||''}</td>
-          <td>${x.tipo_servico||''}</td>
-          <td>${x.prox_leitura||''}</td>
-          <td>${fmtDate(x.prox_data)||''}</td>
-          <td>${statusPill(x.status||'')}</td>
-        </tr>`).join('');
-      $('#tblUpcoming').innerHTML = rows || '<tr><td colspan="6">Sem registros</td></tr>';
-    }
+  async function loadUpcoming(){
+    const data = await apiGet('getUpcoming');
+    UPCOMING = data.items || [];
+    renderUpcoming();
+    const kLate = UPCOMING.filter(x=>x.status && x.status.includes('VENCIDO')).length;
+    const kSoon = UPCOMING.filter(x=>x.status && x.status.includes('BREVE')).length;
+    const kOk   = UPCOMING.filter(x=>x.status && x.status.includes('EM DIA')).length;
+    document.getElementById('kpiVenc').textContent = kLate;
+    document.getElementById('kpiBreve').textContent = kSoon;
+    document.getElementById('kpiDia').textContent   = kOk;
+  }
 
-    async function saveMaintenance(){
-      const payload = {
-        fn: 'addMaintenance',
-        data: {
-          idAtivo: $('#idAtivo').value,
-          tipoServico: $('#tipoServ').value,
-          data: $('#data').value,
-          leituraAtual: $('#leituraAtual').value,
-          leituraTroca: $('#leituraTroca').value,
-          responsavel: $('#responsavel').value,
-          observacoes: $('#obs').value
-        }
-      };
-      if(!payload.data.idAtivo || !payload.data.tipoServico || !payload.data.data){
-        toast('Preencha Ativo, Tipo de serviço e Data.');
-        return;
+  function renderUpcoming(){
+    const q = (document.getElementById('search')?.value||'').toLowerCase();
+    const rows = UPCOMING
+      .filter(x=>!q || [x.id,x.nome,x.tipo_servico,x.status].join(' ').toLowerCase().includes(q))
+      .map(x=>`<tr>
+        <td>${x.id||''}</td>
+        <td>${x.nome||''}</td>
+        <td>${x.tipo_servico||''}</td>
+        <td>${x.prox_leitura||''}</td>
+        <td>${fmtDate(x.prox_data)||''}</td>
+        <td>${statusPill(x.status||'')}</td>
+      </tr>`).join('');
+    document.getElementById('tblUpcoming').innerHTML = rows || '<tr><td colspan="6">Sem registros</td></tr>';
+  }
+
+  async function saveMaintenance(){
+    const payload = {
+      fn: 'addMaintenance',
+      data: {
+        idAtivo:       document.getElementById('idAtivo').value,
+        tipoServico:   document.getElementById('tipoServ').value,
+        data:          document.getElementById('data').value,
+        leituraAtual:  document.getElementById('leituraAtual').value,
+        leituraTroca:  document.getElementById('leituraTroca').value,
+        responsavel:   document.getElementById('responsavel').value,
+        observacoes:   document.getElementById('obs').value
       }
-      try{
-        const res = await apiPost(payload);
-        if(res && res.ok){
-          toast('Manutenção salva!');
-          $('#formNew').reset();
-          $('#data').valueAsNumber = Date.now() - new Date().getTimezoneOffset()*60000;
-          await loadUpcoming();
-        }else{
-          throw new Error('Erro no retorno');
-        }
-      }catch(err){
-        if(OFFLINE_QUEUE){
-          const queued = JSON.parse(localStorage.getItem('ASG_QUEUE')||'[]');
-          queued.push(payload);
-          localStorage.setItem('ASG_QUEUE', JSON.stringify(queued));
-          toast('Sem conexão: salvo na fila offline.');
-        }else{
-          toast('Falha ao salvar. Verifique conexão.');
-        }
+    };
+    if(!payload.data.idAtivo || !payload.data.tipoServico || !payload.data.data){
+      toast('Preencha Ativo, Tipo de serviço e Data.');
+      return;
+    }
+    try{
+      const res = await apiPost(payload);
+      if(res && res.ok){
+        toast('Manutenção salva!');
+        document.getElementById('formNew').reset();
+        document.getElementById('data').valueAsNumber = Date.now() - new Date().getTimezoneOffset()*60000;
+        await loadUpcoming();
+      }else{
+        throw new Error('Erro no retorno');
+      }
+    }catch(err){
+      if(OFFLINE_QUEUE){
+        const queued = JSON.parse(localStorage.getItem('ASG_QUEUE')||'[]');
+        queued.push(payload);
+        localStorage.setItem('ASG_QUEUE', JSON.stringify(queued));
+        toast('Sem conexão: salvo na fila offline.');
+      }else{
+        toast('Falha ao salvar. Verifique conexão.');
       }
     }
+  }
 
-    async function flushQueue(){
-      const queued = JSON.parse(localStorage.getItem('ASG_QUEUE')||'[]');
-      if(!queued.length) return toast('Nada para sincronizar.');
-      let ok=0; let fail=0;
-      for(const p of queued){
-        try{ const r=await apiPost(p); if(r && r.ok){ ok++; } else { fail++; } }
-        catch{ fail++; }
-      }
-      if(fail===0){ localStorage.removeItem('ASG_QUEUE'); }
-      toast(`Sincronização: ${ok} enviados, ${fail} falharam.`);
-      await loadUpcoming();
+  async function flushQueue(){
+    const queued = JSON.parse(localStorage.getItem('ASG_QUEUE')||'[]');
+    if(!queued.length) return toast('Nada para sincronizar.');
+    let ok=0, fail=0;
+    for(const p of queued){
+      try{ const r=await apiPost(p); if(r && r.ok){ ok++; } else { fail++; } }
+      catch{ fail++; }
     }
+    if(fail===0){ localStorage.removeItem('ASG_QUEUE'); }
+    toast(`Sincronização: ${ok} enviados, ${fail} falharam.`);
+    await loadUpcoming();
+  }
 
-    document.getElementById('btnSave').addEventListener('click', saveMaintenance);
-    document.getElementById('btnClear').addEventListener('click', ()=>document.getElementById('formNew').reset());
-    document.getElementById('btnSync').addEventListener('click', flushQueue);
-    document.getElementById('search').addEventListener('input', renderUpcoming);
+  // events
+  document.getElementById('btnSave').addEventListener('click', saveMaintenance);
+  document.getElementById('btnClear').addEventListener('click', ()=>document.getElementById('formNew').reset());
+  document.getElementById('btnSync').addEventListener('click', flushQueue);
+  document.getElementById('search').addEventListener('input', renderUpcoming);
 
-    (async function init(){
-      document.getElementById('data').valueAsNumber = Date.now() - new Date().getTimezoneOffset()*60000;
-      try{ await loadAssets(); await loadUpcoming(); }
-      catch(e){ toast('Conecte seu Apps Script (API_BASE).'); }
-    })();
+  // init
+  (async function init(){
+    const dt = document.getElementById('data');
+    if (dt) dt.valueAsNumber = Date.now() - new Date().getTimezoneOffset()*60000;
+    try{ await loadAssets(); await loadUpcoming(); }
+    catch(e){ toast('Conecte seu Apps Script (API_BASE).'); }
+  })();
   </script>
 </body>
 </html>
